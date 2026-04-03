@@ -1,0 +1,33 @@
+# Career Bot v6 — Dependencies
+
+# ── Web Framework ───────────────────────────────────────────
+flask>=3.0.0
+flask-cors>=4.0.0
+
+# ── Vector DB ───────────────────────────────────────────────
+qdrant-client>=1.9.0
+
+# ── Embedding & Reranking ───────────────────────────────────
+sentence-transformers>=3.0.0
+torch>=2.1.0
+# Jina v3 cần trust_remote_code=True khi load
+
+# ── BM25 ────────────────────────────────────────────────────
+rank-bm25>=0.2.2
+
+# ── LLM (Groq) ──────────────────────────────────────────────
+requests>=2.31.0
+
+# ── Crawling ────────────────────────────────────────────────
+selenium>=4.18.0
+# Cài ChromeDriver tương ứng với Chrome đã có
+# hoặc: pip install webdriver-manager
+
+# ── Utils ───────────────────────────────────────────────────
+python-dotenv>=1.0.0
+tqdm>=4.66.0
+numpy>=1.26.0
+
+# ── Kaggle Ingest (Phase 1 only) ────────────────────────────
+# transformers>=4.40.0   # nếu không dùng sentence-transformers
+# accelerate>=0.29.0
