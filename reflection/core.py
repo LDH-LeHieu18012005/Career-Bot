@@ -39,6 +39,7 @@ HISTORY_COLLECTION = "career_chat_history"
 _ROLE_MAP = {"human": "user", "ai": "assistant"}
 
 _MAX_HISTORY_TURNS = 10   # giữ tối đa N turns (= 2N messages) mỗi session
+_MAX_HISTORY_MSGS  = _MAX_HISTORY_TURNS * 2  # = 20 messages
 
 
 class SelfReflection:
@@ -117,7 +118,7 @@ class SelfReflection:
         """
         try:
             all_msgs = self._scroll_session(session_id)
-            max_msgs = _MAX_HISTORY_TURNS * 2  # N turns = 2N messages
+            max_msgs = _MAX_HISTORY_MSGS
 
             if len(all_msgs) <= max_msgs:
                 return
@@ -182,12 +183,12 @@ class SelfReflection:
         """
         msgs = self._scroll_session(session_id)
         # Lấy N turns cuối
-        msgs = msgs[-(_MAX_HISTORY_TURNS * 2):]
+        msgs = msgs[-_MAX_HISTORY_MSGS:]
         return [{"role": m["role"], "content": m["content"]} for m in msgs]
 
     # ── Query Rewriting ───────────────────────────────────────────────────────
 
-    def process_query(self, session_id: str, query: str) -> str:
+    def process_query(self, session_id: str, query: str, history: list | None = None) -> str:
         """
         Viết lại query dựa trên lịch sử → standalone query đầy đủ nghĩa.
 
@@ -199,7 +200,9 @@ class SelfReflection:
         if not self._ready:
             return query
 
-        history = self.get_history(session_id)
+        if history is None:
+            history = self.get_history(session_id)
+            
         if not history:
             return query
 

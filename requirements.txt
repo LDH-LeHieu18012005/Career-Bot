@@ -6,6 +6,8 @@ flask-cors>=4.0.0
 
 # ── Vector DB ───────────────────────────────────────────────
 qdrant-client>=1.9.0
+# Protobuf >=6 xung đột với qdrant-client — pin để tránh auto-downgrade tại runtime
+protobuf>=3.20.0,<6.0.0
 
 # ── Embedding & Reranking ───────────────────────────────────
 sentence-transformers>=3.0.0

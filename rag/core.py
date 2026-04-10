@@ -11,6 +11,8 @@ import os
 import time
 import unicodedata
 import pickle
+import threading
+from datetime import datetime, timezone
 
 from dotenv import load_dotenv
 from qdrant_client import QdrantClient
@@ -28,12 +30,12 @@ QDRANT_HOST       = os.getenv("QDRANT_HOST", "localhost")
 QDRANT_PORT       = int(os.getenv("QDRANT_PORT", 6333))
 QDRANT_API_KEY    = os.getenv("QDRANT_API_KEY", "")
 COLLECTION_NAME   = os.getenv("QDRANT_COLLECTION", "topcv_jobs_v3")
-DEFAULT_LIMIT     = int(os.getenv("DEFAULT_SEARCH_LIMIT", 5))
+DEFAULT_LIMIT     = int(os.getenv("DEFAULT_SEARCH_LIMIT", 10))
 SIMILARITY_THRESH = float(os.getenv("SIMILARITY_THRESHOLD", 0.25))
 
 CROSS_ENCODER_MODEL = os.getenv(
     "CROSS_ENCODER_MODEL",
-    "cross-encoder/mmarco-mMiniLMv2-L12-H384-v1",
+    "jinaai/jina-reranker-v3",
 )
 RERANK_TOP_K = int(os.getenv("RERANK_TOP_K", 10))
 
@@ -41,6 +43,13 @@ _BM25_CACHE_PATH = os.path.abspath(
     os.path.join(os.path.dirname(__file__), "..", "data", "bm25_cache.pkl")
 )
 
+
+# ── Section → field mapping (dùng trong BM25 và _load_full_jobs) ───────────────
+_SECTION_TO_FIELD = {
+    "description":  "mo_ta",
+    "requirements": "yeu_cau",
+    "benefits":     "quyen_loi",
+}
 
 # ── Experience normalization ──────────────────────────────────────────────────
 
@@ -122,8 +131,10 @@ class RAG:
         self._bm25_ready           = False
         self._cross_encoder        = None
         self._cross_encoder_ready  = False
+        self._ce_lock              = threading.Lock()
         self.client                = self._connect()
         self._init_collection()
+        threading.Thread(target=self._get_cross_encoder, daemon=True, name="CE-warmup").start()
 
     def _connect(self) -> QdrantClient:
         if QDRANT_URL:
@@ -174,7 +185,7 @@ class RAG:
             except Exception as e:
                 print(f"[RAG] Could not create keyword index for '{field}': {e}")
 
-        for field in ("salary_min", "salary_max"):
+        for field in ("salary_min", "salary_max", "deadline_ts"):
             try:
                 self.client.create_payload_index(
                     collection_name=self.collection_name, field_name=field,
@@ -242,12 +253,13 @@ class RAG:
                     content_field = payload.get("benefits", "") or ""
                 elif section == "overview":
                     parts = [f"Vị trí: {payload.get('title', '')}"]
-                    if payload.get("salary_raw") not in ("N/A", "Thoả thuận", "", None):
-                        parts.append(f"Mức lương: {payload['salary_raw']}")
-                    if payload.get("experience") not in ("N/A", "", None):
-                        parts.append(f"Kinh nghiệm: {payload['experience']}")
-                    if payload.get("level") not in ("N/A", "", None):
-                        parts.append(f"Cấp bậc: {payload['level']}")
+                    salary_val = _clean_na(payload.get("salary_raw"))
+                    if salary_val and salary_val not in ("Thoả thuận",):
+                        parts.append(f"Mức lương: {salary_val}")
+                    if _clean_na(payload.get("experience")):
+                        parts.append(f"Kinh nghiệm: {_clean_na(payload['experience'])}")
+                    if _clean_na(payload.get("level")):
+                        parts.append(f"Cấp bậc: {_clean_na(payload['level'])}")
                     content_field = ". ".join(part for part in parts if part).strip()
 
                 if not content_field:
@@ -347,15 +359,25 @@ class RAG:
     def _get_cross_encoder(self):
         if self._cross_encoder_ready:
             return self._cross_encoder
-        self._cross_encoder_ready = True
-        try:
-            from sentence_transformers import CrossEncoder
-            print(f"[RAG] Loading cross-encoder: {CROSS_ENCODER_MODEL}...", end=" ", flush=True)
-            self._cross_encoder = CrossEncoder(CROSS_ENCODER_MODEL)
-            print("OK")
-        except Exception as e:
-            print(f"[RAG] Cross-encoder failed: {e}")
-        return self._cross_encoder
+        with self._ce_lock:
+            if self._cross_encoder_ready:
+                return self._cross_encoder
+            self._cross_encoder_ready = True
+            try:
+                from sentence_transformers import CrossEncoder
+                print(f"[RAG] Loading cross-encoder: {CROSS_ENCODER_MODEL}...", end=" ", flush=True)
+                self._cross_encoder = CrossEncoder(
+                    CROSS_ENCODER_MODEL, 
+                    trust_remote_code=True,
+                    model_kwargs={"torch_dtype": "auto"},
+                    local_files_only=True
+                )
+                if self._cross_encoder.tokenizer.pad_token is None:
+                    self._cross_encoder.tokenizer.pad_token = self._cross_encoder.tokenizer.eos_token
+                print("OK")
+            except Exception as e:
+                print(f"[RAG] Cross-encoder failed: {e}")
+            return self._cross_encoder
 
     # ── Filter builder ────────────────────────────────────────────────────────
 
@@ -375,19 +397,19 @@ class RAG:
         if sal > 0:
             must.append(FieldCondition(key="salary_max", range=Range(gte=float(sal))))
 
+        # [Auto-Update Filter] Loại trừ công việc deadline_ts < now
+        now_ts = datetime.now(timezone.utc).timestamp()
+        must.append(FieldCondition(key="deadline_ts", range=Range(gte=now_ts)))
+
         exp_norm = filters.get("experience_norm")
         if exp_norm == "fresher":
             must_not.extend([
-                FieldCondition(key="level", match=MatchValue(value="Senior")),
-                FieldCondition(key="level", match=MatchValue(value="Lead")),
-                FieldCondition(key="level", match=MatchValue(value="Manager")),
-                FieldCondition(key="level", match=MatchValue(value="Principal")),
+                FieldCondition(key="level_norm", match=MatchAny(any=["senior", "lead", "manager", "director"])),
+                FieldCondition(key="experience_norm", match=MatchAny(any=["expert"]))
             ])
         elif exp_norm == "junior":
             must_not.extend([
-                FieldCondition(key="level", match=MatchValue(value="Lead")),
-                FieldCondition(key="level", match=MatchValue(value="Manager")),
-                FieldCondition(key="level", match=MatchValue(value="Principal")),
+                FieldCondition(key="level_norm", match=MatchAny(any=["lead", "manager", "director"])),
             ])
 
         if exclude_ids:
@@ -462,6 +484,8 @@ class RAG:
         ]
 
         results, seen = [], set()
+        now_ts = datetime.now(timezone.utc).timestamp()
+
         for idx in top_idx:
             item   = self._bm25_corpus[idx]
             pl     = item["payload"]
@@ -480,6 +504,11 @@ class RAG:
                     jmax = pl.get("salary_max", 0) or 0
                     if jmax > 0 and jmax < sal:
                         continue
+
+                # [Auto-Update Filter] Realtime check trong array bm25
+                dts = pl.get("deadline_ts", 0.0)
+                if dts and dts > 0 and dts < now_ts:
+                    continue
 
             if job_id and job_id not in seen:
                 seen.add(job_id)
@@ -525,20 +554,9 @@ class RAG:
                 merged[job_id]["_rrf_rank"] = order[job_id]
 
             section = pl.get("section", "")
-            text = ""
-            if section == "description":
-                text = pl.get("description", "") or ""
-            elif section == "requirements":
-                text = pl.get("requirements", "") or ""
-            elif section == "benefits":
-                text = pl.get("benefits", "") or ""
-
-            if section == "description":
-                merged[job_id]["mo_ta"] = text
-            elif section == "requirements":
-                merged[job_id]["yeu_cau"] = text
-            elif section == "benefits":
-                merged[job_id]["quyen_loi"] = text
+            if section in _SECTION_TO_FIELD:
+                field = _SECTION_TO_FIELD[section]
+                merged[job_id][field] = pl.get(section, "") or ""
             elif section == "overview" and not merged[job_id].get("has_overview"):
                 merged[job_id].update(_to_job(pl, 1.0))
                 merged[job_id]["_rrf_rank"]    = order[job_id]
@@ -608,7 +626,7 @@ class RAG:
             ])
 
         try:
-            scores = ce.predict(pairs)
+            scores = ce.predict(pairs, batch_size=1)
             ranked = sorted(zip(jobs, scores), key=lambda x: x[1], reverse=True)
             print(f"[RAG] Rerank: top={ranked[0][1]:.3f} | n={len(ranked)}")
             return [j for j, _ in ranked[:top_n]]
@@ -633,7 +651,7 @@ class RAG:
         if not jobs:
             return "Không tìm thấy công việc phù hợp.", set()
 
-        jobs        = jobs[:3]
+        jobs        = jobs[:10]
         valid_links = {j.get("url", "").split("?")[0] for j in jobs if j.get("url")}
         lines       = []
 

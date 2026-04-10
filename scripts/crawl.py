@@ -348,8 +348,6 @@ def main():
     driver    = create_driver(headless=args.headless)
     page      = 1
     no_new    = 0
-    errors    = 0
-    MAX_ERR   = 10
 
     try:
         while True:
@@ -360,13 +358,11 @@ def main():
 
             if new_jobs == 0:
                 no_new += 1
-                errors += 1
                 wait    = min(30, 5 * no_new)
                 print(f"   ⚠️  Không có job mới ({no_new}/{MAX_NO_NEW_PAGES}). Chờ {wait}s...")
                 time.sleep(wait)
             else:
                 no_new = 0
-                errors = 0
 
             # Progress report
             if total % 50 < new_jobs:
@@ -378,10 +374,6 @@ def main():
 
             if no_new >= MAX_NO_NEW_PAGES:
                 print(f"\n🛑 {MAX_NO_NEW_PAGES} pages liên tiếp không có job mới → DONE")
-                break
-
-            if errors >= MAX_ERR:
-                print(f"\n🛑 Quá nhiều lỗi liên tiếp ({MAX_ERR}) → DONE")
                 break
 
             page += 1

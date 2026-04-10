@@ -25,6 +25,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 GROQ_API_KEY  = os.getenv("GROQ_API_KEY", "")
+GROQ_API_KEYS = os.getenv("GROQ_API_KEYS", "")
 GROQ_MODEL    = os.getenv("GROQ_MODEL", "llama-3.1-8b-instant")
 GROQ_TIMEOUT  = int(os.getenv("GROQ_TIMEOUT", 60))
 GROQ_ENDPOINT = "https://api.groq.com/openai/v1/chat/completions"
@@ -47,29 +48,41 @@ class _GroqResponse:
         self.choices = [_Choice(content)]
 
 
-class HFClient:
+class GroqClient:
     """
     Groq HTTP client — production-ready với retry thông minh.
 
     Dùng:
-        llm  = HFClient()
+        llm  = GroqClient()
         resp = llm.chat(messages=[...], max_tokens=1000)
         text = resp.choices[0].message.content
     """
 
-    def __init__(self, api_key: str = GROQ_API_KEY, model: str = GROQ_MODEL):
-        if not api_key or api_key in ("your_groq_api_key_here", ""):
+    def __init__(self, api_keys: str | None = None, model: str = GROQ_MODEL):
+        if not api_keys:
+            api_keys = GROQ_API_KEYS or GROQ_API_KEY
+
+        if not api_keys or api_keys in ("your_groq_api_key_here", ""):
             raise ValueError(
-                "Thiếu GROQ_API_KEY trong .env\n"
+                "Thiếu GROQ_API_KEYS hoặc GROQ_API_KEY trong .env\n"
                 "Lấy key miễn phí: https://console.groq.com/keys"
             )
+
+        self.api_keys = [k.strip() for k in api_keys.split(",") if k.strip()]
+        self._key_idx = 0
         self.model    = model
         self._session = requests.Session()
         self._session.headers.update({
-            "Authorization": f"Bearer {api_key}",
+            "Authorization": f"Bearer {self.api_keys[self._key_idx]}",
             "Content-Type":  "application/json",
         })
-        print(f"[Groq] model={self.model} | timeout={GROQ_TIMEOUT}s")
+        print(f"[Groq] model={self.model} | {len(self.api_keys)} keys loaded | timeout={GROQ_TIMEOUT}s")
+
+    def _rotate_key(self):
+        """Xoay vòng sang API key tiếp theo."""
+        self._key_idx = (self._key_idx + 1) % len(self.api_keys)
+        self._session.headers.update({"Authorization": f"Bearer {self.api_keys[self._key_idx]}"})
+        print(f"[Groq] Key rotated → {self._key_idx + 1}/{len(self.api_keys)}")
 
     def chat(
         self,
@@ -78,9 +91,7 @@ class HFClient:
         temperature: float = 0.5,
         retries:     int   = 3,
     ) -> _GroqResponse:
-        """
-        Gọi Groq API với retry thông minh.
-        """
+        """Gọi Groq API với retry thông minh."""
         payload = {
             "model":       self.model,
             "messages":    messages,
@@ -90,30 +101,19 @@ class HFClient:
 
         for attempt in range(retries + 1):
             try:
-                resp = self._session.post(
-                    GROQ_ENDPOINT,
-                    json=payload,
-                    timeout=GROQ_TIMEOUT,
-                )
+                resp = self._session.post(GROQ_ENDPOINT, json=payload, timeout=GROQ_TIMEOUT)
 
                 if resp.status_code == 200:
-                    data    = resp.json()
-                    content = data["choices"][0]["message"]["content"]
+                    content = resp.json()["choices"][0]["message"]["content"]
                     return _GroqResponse(content)
 
-                # Rate limit (429)
+                # Rate limit (429) — rotate key nếu có, sau đó backoff
                 if resp.status_code == 429:
+                    if len(self.api_keys) > 1:
+                        self._rotate_key()
                     if attempt >= retries:
                         raise RuntimeError(f"Groq rate limit sau {retries} retries")
-
-                    # Đọc Retry-After header nếu có
-                    retry_after = resp.headers.get("Retry-After")
-                    if retry_after:
-                        wait = float(retry_after)
-                    else:
-                        # Exponential backoff: 10s, 20s, 40s
-                        wait = 10 * (2 ** attempt)
-
+                    wait = float(resp.headers.get("Retry-After") or 10 * (2 ** attempt))
                     print(f"[Groq] 429 Rate limit — chờ {wait:.0f}s (attempt {attempt+1}/{retries})")
                     time.sleep(wait)
                     continue
@@ -128,9 +128,7 @@ class HFClient:
                     continue
 
                 # Lỗi không retry được
-                raise RuntimeError(
-                    f"Groq API error {resp.status_code}: {resp.text[:200]}"
-                )
+                raise RuntimeError(f"Groq API error {resp.status_code}: {resp.text[:200]}")
 
             except requests.Timeout:
                 if attempt >= retries:
@@ -152,3 +150,7 @@ class HFClient:
             self._session.close()
         except Exception:
             pass
+
+
+# Backward-compat alias
+HFClient = GroqClient

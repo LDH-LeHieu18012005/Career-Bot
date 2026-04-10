@@ -12,6 +12,10 @@ import torch
 import numpy as np
 from dotenv import load_dotenv
 
+os.environ["HF_HUB_OFFLINE"] = "1"
+os.environ["TRANSFORMERS_OFFLINE"] = "1"
+os.environ["PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION"] = "python"
+
 load_dotenv()
 
 HF_MODEL_NAME = os.getenv("EMBED_MODEL", "jinaai/jina-embeddings-v3")
@@ -59,6 +63,7 @@ class EmbeddingModel:
                 HF_MODEL_NAME,
                 trust_remote_code=True,
                 device=self._device,
+                local_files_only=True
             )
             print("[Embedder] ✅ Model loaded")
             return model

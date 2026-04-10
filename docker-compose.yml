@@ -1,0 +1,21 @@
+version: "3.8"
+services:
+  # ── Deadline Cleaner ──────────────────────────────────────────────────────
+  # Tự động xóa tin tuyển dụng hết hạn khỏi Qdrant mỗi 24 giờ (lúc 02:00)
+  #
+  # Biến môi trường cần đặt trong .env:
+  #   QDRANT_URL, QDRANT_API_KEY, QDRANT_COLLECTION
+  #
+  # Để chạy thử (dry-run):
+  #   docker-compose run --rm deadline_cleaner python pipeline/deadline_cleaner.py --dry-run
+  deadline_cleaner:
+    image: python:3.11-slim
+    working_dir: /app
+    volumes:
+      - .:/app
+    env_file:
+      - .env
+    command: >
+      sh -c "pip install -q qdrant-client python-dotenv schedule &&
+             python pipeline/deadline_cleaner.py --schedule --cron-time 02:00"
+    restart: unless-stopped
