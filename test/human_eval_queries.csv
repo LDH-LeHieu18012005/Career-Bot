@@ -1,0 +1,101 @@
+id,route,difficulty,query
+1,job_search,easy,Backend developer Hà Nội
+2,job_search,easy,Frontend developer TP.HCM
+3,job_search,easy,Tester manual Hồ Chí Minh
+4,job_search,easy,Data Analyst Hà Nội
+5,job_search,easy,Java Developer remote
+6,job_search,medium,Lương 15 triệu frontend developer hcm
+7,job_search,medium,Backend developer lương từ 20 đến 30 triệu hà nội
+8,job_search,medium,Senior java developer lương trên 40 triệu
+9,job_search,medium,Fresher tester tp hcm
+10,job_search,medium,Remote python developer
+11,job_search,hard,Backend developer hà nội lương 25 triệu 2 năm kinh nghiệm
+12,job_search,hard,Frontend remote lương 18 đến 25 triệu
+13,job_search,hard,Tester manual tp hcm lương 12 triệu fresher
+14,job_search,hard,Data engineer hà nội senior lương trên 40 triệu
+15,job_search,hard,React native developer remote 3 năm kinh nghiệm
+16,job_search,medium,Fresher python developer hà nội
+17,job_search,medium,Junior frontend developer tp hcm
+18,job_search,hard,Senior backend developer 5 năm kinh nghiệm
+19,job_search,medium,Sinh viên mới ra trường làm tester
+20,job_search,hard,Chưa có kinh nghiệm vị trí IT Support
+21,job_search,hard,Lead developer cần 7 năm kinh nghiệm
+22,job_search,hard,Intern java hcm
+23,job_search,hard,Mid-level data analyst 3 năm kinh nghiệm
+24,job_search,hard,Backend developer hà nội lương cao hơn lần trước
+25,job_search,hard,Tôi muốn remote, lương cao hơn 20 triệu
+26,job_search,hard,Gợi ý việc làm gần đây nhất cho frontend
+27,job_search,hard,Công việc có link ứng tuyển trực tiếp
+28,job_search,hard,Job không yêu cầu kinh nghiệm hà nội
+29,job_search,hard,Chuyển ngành sang IT, vị trí fresher
+30,job_search,hard,Công ty nước ngoài tuyển lập trình viên hcm
+31,job_search,hard,Việc làm có bảo hiểm đầy đủ lương 15 triệu
+32,job_search,hard,Fullstack developer lương 30 triệu hà nội
+33,job_search,hard,QA Automation tp hcm 2 năm kinh nghiệm
+34,job_search,hard,Business analyst remote lương 18 triệu
+35,job_search,hard,Mobile developer flutter lương 25 triệu
+36,job_search,hard,Việc làm hybrid cho senior developer
+37,job_search,hard,Tìm job ít overtime cho lập trình viên
+38,job_search,hard,Java developer hà nội lương từ 18 đến 25 triệu
+39,job_search,hard,Tôi muốn tìm việc làm remote toàn thời gian
+40,job_search,hard,Senior devops engineer lương trên 45 triệu
+41,job_search,hard,Công việc cho người mới chuyển từ tester sang developer
+42,job_search,hard,Việc làm có chế độ đãi ngộ tốt cho fresher
+43,job_search,hard,Reactjs developer lương 22 triệu tp hcm
+44,job_search,hard,.NET developer hà nội 3 năm kinh nghiệm
+45,job_search,hard,Công việc lương trên 35 triệu cho senior
+46,job_search,hard,Tester automation hcm lương 18 triệu
+47,job_search,hard,PHP developer remote
+48,job_search,hard,Golang developer hà nội
+49,job_search,hard,Tôi muốn tìm việc làm gần nhà ở quận 7
+50,job_search,hard,Job có hỗ trợ ăn trưa và xe đưa đón
+51,job_search,hard,Senior frontend lương 30 triệu trở lên
+52,job_search,hard,Fresher có được apply vị trí junior không
+53,job_search,hard,Việc làm part-time cho sinh viên IT
+54,job_search,hard,Công việc không cần tiếng Anh
+55,job_search,hard,Devops engineer remote lương cao
+56,job_search,hard,Tôi muốn chuyển việc, gợi ý vị trí phù hợp
+57,job_search,hard,Job có deadline apply trong tháng này
+58,job_search,hard,Nhân viên kinh doanh IT lương 15 triệu
+59,job_search,hard,UI/UX Designer hcm lương 20 triệu
+60,job_search,hard,Product Owner vị trí hà nội
+61,job_search,hard,Việc làm có thưởng hiệu suất cao
+62,job_search,hard,Công việc cho người trên 30 tuổi
+63,job_search,hard,Junior data scientist hà nội
+64,job_search,hard,Tôi thích làm remote, giới thiệu việc phù hợp
+65,job_search,hard,Backend node.js lương 25 triệu
+66,job_search,hard,Việc làm có team nhỏ, ít họp hành
+67,job_search,hard,Senior QA lead tp hcm
+68,job_search,hard,Tìm việc làm fullstack javascript
+69,job_search,hard,Công việc có cơ hội đi nước ngoài
+70,job_search,hard,Fresher có học phí hỗ trợ không
+71,career_advice,medium,Làm sao để chuẩn bị CV cho vị trí backend fresher
+72,career_advice,medium,Nên học thêm kỹ năng gì để làm frontend developer
+73,career_advice,hard,Cách đàm phán lương khi phỏng vấn senior
+74,career_advice,medium,Lương khởi điểm fresher IT năm 2026 là bao nhiêu
+75,career_advice,hard,Lộ trình trở thành data engineer trong 2 năm
+76,career_advice,medium,Có nên chuyển sang remote không, ưu nhược điểm
+77,career_advice,hard,Làm sao để lên senior developer nhanh chóng
+78,career_advice,medium,Nên học tiếng Anh bao nhiêu để apply công ty nước ngoài
+79,career_advice,hard,Cách trả lời phỏng vấn "Why should we hire you?"
+80,career_advice,medium,Làm sao để viết thư xin việc hiệu quả
+81,career_advice,hard,Nên chọn công ty startup hay công ty lớn để bắt đầu
+82,career_advice,medium,Kinh nghiệm phỏng vấn kỹ thuật backend nên chuẩn bị gì
+83,career_advice,hard,Làm thế nào để chuyển việc từ tester sang developer
+84,career_advice,medium,Có nên học thêm chứng chỉ AWS hay Google Cloud
+85,career_advice,hard,Lời khuyên cho người 30 tuổi mới bắt đầu học lập trình
+86,career_advice,medium,Cách xây dựng portfolio cho fresher IT
+87,career_advice,hard,Nên tập trung vào kỹ năng mềm hay kỹ năng chuyên môn
+88,career_advice,medium,Làm sao để nổi bật trong vòng CV screening
+89,career_advice,hard,Chiến lược xin việc sau khi nghỉ việc 6 tháng
+90,career_advice,medium,Nên học thêm AI hay Cloud để tăng cơ hội việc làm
+91,chitchat,easy,Hello, hôm nay bạn khỏe không?
+92,chitchat,easy,Cảm ơn bạn đã hỗ trợ
+93,chitchat,easy,Bạn là AI phải không?
+94,chitchat,easy,Hôm nay thời tiết thế nào?
+95,chitchat,easy,Chúc bạn một ngày tốt lành
+96,chitchat,easy,Bạn có mệt không?
+97,chitchat,easy,Tôi đang buồn, kể chuyện vui đi
+98,chitchat,easy,Bạn thích màu gì?
+99,chitchat,easy,Hôm nay ăn gì ngon không?
+100,chitchat,easy,Tạm biệt nhé
