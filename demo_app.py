@@ -1,123 +1,139 @@
-# demo_app.py
 import uuid
 import time
 import streamlit as st
 import requests
 
-# --- Cấu hình cơ bản ---
-st.set_page_config(page_title="Career Bot Demo", page_icon="🤖")
-st.title("🤖 Career Bot Demo")
+# --- 1. Cấu hình trang ---
+st.set_page_config(page_title="Career Bot Demo", page_icon="🤖", layout="centered")
 
-API_ENDPOINT = "http://127.0.0.1:5001/api/v1/chat"
-
-# --- CSS: timer badge nhỏ gọn ---
+# --- 2. CSS (giữ nguyên) ---
 st.markdown("""
 <style>
-.timer-badge {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    font-size: 11px;
-    color: #888;
-    background: rgba(0,0,0,0.04);
-    border: 1px solid rgba(0,0,0,0.08);
-    border-radius: 20px;
-    padding: 2px 8px;
-    margin-top: 6px;
-    width: fit-content;
-}
-.timer-dot {
-    width: 6px;
-    height: 6px;
-    border-radius: 50%;
-    background: #4caf50;
-    flex-shrink: 0;
-}
-.timer-dot.slow { background: #ff9800; }
-.timer-dot.veryslow { background: #f44336; }
+    .stApp { background-color: #F4F7FB; }
+    h1 {
+        color: #050A30 !important;
+        font-weight: 800 !important;
+        text-align: center;
+        margin-bottom: 25px;
+    }
+    [data-testid="stChatMessage"] {
+        border-radius: 15px;
+        padding: 14px 18px;
+        margin-bottom: 12px;
+    }
+    /* User */
+    [data-testid="stChatMessage"]:nth-child(even) {
+        background-color: #E8F5FE;
+        border: 1px solid #87D4F5;
+    }
+    /* Assistant */
+    [data-testid="stChatMessage"]:nth-child(odd) {
+        background-color: #FFFFFF;
+        border: 1px solid #8DA1F2;
+        box-shadow: 0 4px 12px rgba(141, 161, 242, 0.08);
+    }
+
+    .timer-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 12px;
+        font-weight: 600;
+        color: #5C6C85;
+        background: #f8f9fa;
+        border: 1px solid #dee2e6;
+        border-radius: 20px;
+        padding: 5px 12px;
+        margin: 10px 0 6px 0;
+        width: fit-content;
+    }
+    .timer-dot {
+        width: 8px; height: 8px; border-radius: 50%; background: #4caf50;
+    }
+    .timer-dot.slow { background: #ff9800; }
+    .timer-dot.veryslow { background: #f44336; }
 </style>
 """, unsafe_allow_html=True)
 
-# --- Session State ---
+# --- 3. Session State ---
 if "session_id" not in st.session_state:
     st.session_state.session_id = str(uuid.uuid4())
-
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-# --- Hiển thị lịch sử ---
-for message in st.session_state.messages:
-    with st.chat_message(message["role"]):
-        st.markdown(message["content"])
-        if message["role"] == "assistant" and message.get("elapsed"):
-            elapsed = message["elapsed"]
-            if elapsed < 5:
-                dot_cls = "timer-dot"
-            elif elapsed < 15:
-                dot_cls = "timer-dot slow"
+API_ENDPOINT = "http://127.0.0.1:5001/api/v1/chat"
+
+st.title("🤖 Career Bot Demo")
+
+# Hiển thị lịch sử
+for msg in st.session_state.messages:
+    with st.chat_message(msg["role"]):
+        st.markdown(msg["content"])
+        if msg["role"] == "assistant" and "elapsed" in msg:
+            elapsed = msg["elapsed"]
+            # NGƯỠNG MỚI - ĐÃ NÂNG LÊN
+            if elapsed < 6:
+                dot = "timer-dot"           # Xanh lá
+            elif elapsed < 12:
+                dot = "timer-dot slow"      # Cam
             else:
-                dot_cls = "timer-dot veryslow"
+                dot = "timer-dot veryslow"  # Đỏ
             st.markdown(
-                f'<div class="timer-badge">'
-                f'<span class="{dot_cls}"></span>'
-                f'{elapsed:.2f}s'
-                f'</div>',
-                unsafe_allow_html=True,
+                f'<div class="timer-badge"><span class="{dot}"></span>Thời gian phản hồi: {elapsed:.2f}s</div>',
+                unsafe_allow_html=True
             )
 
 # --- Input ---
-if prompt := st.chat_input("Bạn muốn hỏi gì?"):
+if prompt := st.chat_input("Nhập câu hỏi tại đây..."):
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
         st.markdown(prompt)
 
     with st.chat_message("assistant"):
         message_placeholder = st.empty()
-        timer_placeholder   = st.empty()
-        full_response = ""
-        elapsed = 0.0
+        timer_placeholder = st.empty()
 
-        # Hiện spinner nhỏ trong lúc chờ
-        with st.spinner(""):
-            t_start = time.perf_counter()
-            try:
+        full_response = ""
+        t_start = time.perf_counter()
+
+        try:
+            with st.spinner("Đang tìm kiếm và phân tích..."):
                 response = requests.post(
                     API_ENDPOINT,
                     json={"query": prompt, "session_id": st.session_state.session_id},
-                    timeout=120,
+                    timeout=120
                 )
-                elapsed = time.perf_counter() - t_start
+
+                ttft = time.perf_counter() - t_start
 
                 if response.status_code == 200:
-                    full_response = response.json().get(
-                        "content", "Xin lỗi, mình không hiểu yêu cầu của bạn."
-                    )
+                    data = response.json()
+                    full_response = data.get("content", "Tôi không hiểu câu hỏi của bạn.")
                 else:
-                    full_response = f"❌ Lỗi từ API: {response.status_code} - {response.text}"
-            except requests.exceptions.RequestException as e:
-                elapsed = time.perf_counter() - t_start
-                full_response = f"❌ Lỗi kết nối đến API: {e}"
+                    full_response = f"❌ Lỗi server: {response.status_code}"
+
+        except Exception as e:
+            ttft = time.perf_counter() - t_start
+            full_response = f"❌ Lỗi kết nối: {str(e)}"
+
+        # NGƯỠNG MỚI - ĐÃ NÂNG LÊN
+        if ttft < 6:
+            dot = "timer-dot"           # Xanh lá - nhanh
+        elif ttft < 12:
+            dot = "timer-dot slow"      # Cam - chấp nhận được
+        else:
+            dot = "timer-dot veryslow"  # Đỏ - chậm
+
+        timer_placeholder.markdown(
+            f'<div class="timer-badge"><span class="{dot}"></span>Thời gian phản hồi: {ttft:.2f}s</div>',
+            unsafe_allow_html=True
+        )
 
         message_placeholder.markdown(full_response)
 
-        # Badge thời gian
-        if elapsed < 5:
-            dot_cls = "timer-dot"
-        elif elapsed < 15:
-            dot_cls = "timer-dot slow"
-        else:
-            dot_cls = "timer-dot veryslow"
-
-        timer_placeholder.markdown(
-            f'<div class="timer-badge">'
-            f'<span class="{dot_cls}"></span>'
-            f'{elapsed:.2f}s'
-            f'</div>',
-            unsafe_allow_html=True,
-        )
-
+    # Lưu vào lịch sử
     st.session_state.messages.append({
-        "role":    "assistant",
+        "role": "assistant",
         "content": full_response,
-        "elapsed": elapsed,
+        "elapsed": ttft
     })

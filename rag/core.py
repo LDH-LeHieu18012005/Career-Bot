@@ -33,11 +33,25 @@ COLLECTION_NAME   = os.getenv("QDRANT_COLLECTION", "topcv_jobs_v3")
 DEFAULT_LIMIT     = int(os.getenv("DEFAULT_SEARCH_LIMIT", 10))
 SIMILARITY_THRESH = float(os.getenv("SIMILARITY_THRESHOLD", 0.25))
 
-CROSS_ENCODER_MODEL = os.getenv(
-    "CROSS_ENCODER_MODEL",
-    "jinaai/jina-reranker-v3",
-)
 RERANK_TOP_K = int(os.getenv("RERANK_TOP_K", 10))
+
+# ── Qwen3 Reranker config ─────────────────────────────────────────────────────
+QWEN3_RERANKER_MODEL  = os.getenv("QWEN3_RERANKER_MODEL", "Qwen/Qwen3-Reranker-0.6B")
+QWEN3_RERANKER_DEVICE = os.getenv("QWEN3_RERANKER_DEVICE", "").strip() or None
+HF_TOKEN              = os.getenv("HF_TOKEN", "")
+
+# Prompt constants theo Qwen3-Reranker model card
+_QWEN3_SYS_PREFIX = (
+    "<|im_start|>system\n"
+    'Judge whether the Document meets the requirements based on the Query '
+    'and the Instruct provided. Note that the answer can only be "yes" or "no".'
+    "<|im_end|>\n<|im_start|>user\n"
+)
+_QWEN3_SUFFIX = "<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n"
+_QWEN3_TASK   = (
+    "Tìm kiếm công việc phù hợp với yêu cầu của ứng viên. "
+    "Đánh giá xem Document (mô tả công việc) có đáp ứng Query (yêu cầu tìm việc) không."
+)
 
 _BM25_CACHE_PATH = os.path.abspath(
     os.path.join(os.path.dirname(__file__), "..", "data", "bm25_cache.pkl")
@@ -129,12 +143,12 @@ class RAG:
         self._bm25                 = None
         self._bm25_corpus: list[dict] = []
         self._bm25_ready           = False
-        self._cross_encoder        = None
-        self._cross_encoder_ready  = False
-        self._ce_lock              = threading.Lock()
+        self._reranker         = None
+        self._reranker_ready   = False
+        self._reranker_lock    = threading.Lock()
         self.client                = self._connect()
         self._init_collection()
-        threading.Thread(target=self._get_cross_encoder, daemon=True, name="CE-warmup").start()
+        threading.Thread(target=self._load_reranker, daemon=True, name="Reranker-warmup").start()
 
     def _connect(self) -> QdrantClient:
         if QDRANT_URL:
@@ -354,30 +368,118 @@ class RAG:
         self._bm25_corpus = []
         self._build_bm25()
 
-    # ── Cross-Encoder ─────────────────────────────────────────────────────────
+    # ── Qwen3 Reranker ────────────────────────────────────────────────────────
 
-    def _get_cross_encoder(self):
-        if self._cross_encoder_ready:
-            return self._cross_encoder
-        with self._ce_lock:
-            if self._cross_encoder_ready:
-                return self._cross_encoder
-            self._cross_encoder_ready = True
+    def _load_reranker(self):
+        """
+        Load Qwen3-Reranker-0.6B (AutoModelForCausalLM) dùng HF_TOKEN.
+        - padding_side="left"  → logits[:,-1,:] luôn đúng vị trí last token khi batch > 1
+        - model.config.pad_token_id phải được set → Qwen3.forward() đọc config, không tokenizer
+        - CPU: float32; GPU: float16
+        """
+        if self._reranker_ready:
+            return self._reranker
+        with self._reranker_lock:
+            if self._reranker_ready:
+                return self._reranker
+            self._reranker_ready = True
             try:
-                from sentence_transformers import CrossEncoder
-                print(f"[RAG] Loading cross-encoder: {CROSS_ENCODER_MODEL}...", end=" ", flush=True)
-                self._cross_encoder = CrossEncoder(
-                    CROSS_ENCODER_MODEL, 
-                    trust_remote_code=True,
-                    model_kwargs={"torch_dtype": "auto"},
-                    local_files_only=True
+                import math
+                import torch
+                from transformers import AutoTokenizer, AutoModelForCausalLM
+
+                print(
+                    f"[RAG] Loading Qwen3 reranker: {QWEN3_RERANKER_MODEL}...",
+                    end=" ", flush=True,
                 )
-                if self._cross_encoder.tokenizer.pad_token is None:
-                    self._cross_encoder.tokenizer.pad_token = self._cross_encoder.tokenizer.eos_token
-                print("OK")
+                t0 = time.time()
+                is_cuda = torch.cuda.is_available()
+
+                tok = AutoTokenizer.from_pretrained(
+                    QWEN3_RERANKER_MODEL,
+                    padding_side="left",
+                    token=HF_TOKEN or None,
+                )
+                if tok.pad_token is None:
+                    tok.pad_token    = tok.eos_token
+                    tok.pad_token_id = tok.eos_token_id
+
+                load_kw: dict = {}
+                if QWEN3_RERANKER_DEVICE:
+                    load_kw["device_map"] = QWEN3_RERANKER_DEVICE
+                else:
+                    load_kw["device_map"] = "auto"
+
+                if is_cuda:
+                    load_kw["torch_dtype"] = torch.float16
+                # CPU: không set torch_dtype → float32 mặc định (float16 CPU gây lỗi)
+
+                model = AutoModelForCausalLM.from_pretrained(
+                    QWEN3_RERANKER_MODEL,
+                    token=HF_TOKEN or None,
+                    **load_kw,
+                ).eval()
+                model.config.pad_token_id = tok.pad_token_id  # bắt buộc cho Qwen3 batch
+
+                # pre-tokenize prefix / suffix (dùng lại cho mọi pair)
+                prefix_ids = tok.encode(_QWEN3_SYS_PREFIX, add_special_tokens=False)
+                suffix_ids = tok.encode(_QWEN3_SUFFIX,     add_special_tokens=False)
+                yes_id     = tok.convert_tokens_to_ids("yes")
+                no_id      = tok.convert_tokens_to_ids("no")
+                device     = next(model.parameters()).device
+
+                self._reranker = {
+                    "model":      model,
+                    "tok":        tok,
+                    "prefix_ids": prefix_ids,
+                    "suffix_ids": suffix_ids,
+                    "yes_id":     yes_id,
+                    "no_id":      no_id,
+                    "device":     device,
+                    "math":       math,
+                    "torch":      torch,
+                }
+                print(f"OK ({time.time()-t0:.1f}s) | device={device}")
             except Exception as e:
-                print(f"[RAG] Cross-encoder failed: {e}")
-            return self._cross_encoder
+                print(f"\n[RAG] Qwen3 reranker load failed: {e}")
+        return self._reranker
+
+    def _qwen3_score_pairs(self, pairs: list[list[str]]) -> list[float]:
+        """
+        Score list of [query, doc] pairs.
+        Trả về P("yes") cho mỗi pair, theo thứ tự input.
+        Batch size = 1 để an toàn trên CPU; tăng lên nếu có GPU.
+        """
+        r = self._load_reranker()
+        if r is None:
+            return [0.0] * len(pairs)
+
+        model  = r["model"]; tok   = r["tok"]
+        pfx    = r["prefix_ids"]; sfx = r["suffix_ids"]
+        yes_id = r["yes_id"];  no_id = r["no_id"]
+        math   = r["math"];   torch = r["torch"]
+        budget = 4096 - len(pfx) - len(sfx)
+
+        scores: list[float] = []
+        for query, doc in pairs:
+            text = f"<Instruct>: {_QWEN3_TASK}\n<Query>: {query}\n<Document>: {doc}"
+            raw  = tok([text], padding=False, truncation=True,
+                       max_length=budget, return_attention_mask=False)
+            raw["input_ids"][0] = pfx + raw["input_ids"][0] + sfx
+            inputs = tok.pad(raw, padding=True, return_tensors="pt",
+                             max_length=4096).to(r["device"])
+            try:
+                with torch.no_grad():
+                    logits = model(**inputs).logits   # (1, seq, vocab)
+                last = logits[0, -1, :]               # (vocab,)
+                ls   = torch.nn.functional.log_softmax(
+                    torch.stack([last[no_id], last[yes_id]]), dim=0
+                )
+                scores.append(ls[1].exp().item())
+            except Exception as e:
+                print(f"[RAG] Qwen3 score error: {e}")
+                scores.append(0.0)
+        return scores
 
     # ── Filter builder ────────────────────────────────────────────────────────
 
@@ -602,17 +704,20 @@ class RAG:
 
         return self._rerank(query, full_jobs, top_n=limit)
 
-    # ── [V6.1-FIX] _rerank: bỏ "N/A" company khi build pair cross-encoder ───
+    # ── [V6.2] _rerank: Qwen3-Reranker-0.6B ────────────────────────────────
 
     def _rerank(self, query: str, jobs: list[dict], top_n: int = DEFAULT_LIMIT) -> list[dict]:
-        ce = self._get_cross_encoder()
-        if ce is None or not jobs:
+        if not jobs:
+            return []
+        # Đảm bảo reranker đã load (warmup thread có thể chưa xong)
+        if self._reranker is None:
+            self._load_reranker()
+        if self._reranker is None:
             return sorted(jobs, key=lambda j: j.get("_rrf_rank", 999))[:top_n]
 
         pairs = []
         for j in jobs:
-            company_str = _clean_na(j.get("company"))
-            # Chỉ thêm "Công ty: ..." vào pair nếu có dữ liệu thực
+            company_str  = _clean_na(j.get("company"))
             company_part = f"Công ty: {company_str}. " if company_str else ""
             pairs.append([
                 query,
@@ -626,9 +731,9 @@ class RAG:
             ])
 
         try:
-            scores = ce.predict(pairs, batch_size=1)
+            scores = self._qwen3_score_pairs(pairs)
             ranked = sorted(zip(jobs, scores), key=lambda x: x[1], reverse=True)
-            print(f"[RAG] Rerank: top={ranked[0][1]:.3f} | n={len(ranked)}")
+            print(f"[RAG] Rerank [Qwen3]: top={ranked[0][1]:.4f} | n={len(ranked)}")
             return [j for j, _ in ranked[:top_n]]
         except Exception as e:
             print(f"[RAG] Rerank error: {e}")
