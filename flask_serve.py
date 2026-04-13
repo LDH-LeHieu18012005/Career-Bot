@@ -1,10 +1,13 @@
 """
-flask_serve.py — Career Bot API Server v6.2
+flask_serve.py — Career Bot API Server v6.3
 ============================================
+[V6.3] Cải tiến:
+  - Prompt enforcement: filter mạnh (lương/KN/địa điểm), format cứng, chống bịa/lặp job
+  - _build_rag_messages: truyền [BỘ LỌC USER YÊU CẦU] rõ ràng cho LLM
+  - _ensure_format: xoá 5 pattern bẩn LLM phổ biến
+
 [V6.2] Tối ưu tốc độ:
-  - _HistoryCache: RAM cache cho conversation history (TTL 5 phút)
-    → Loại bỏ 1 Qdrant roundtrip (~350ms) TRƯỚC MỖI request
-  - Chỉ gọi Qdrant khi cache miss
+  - _HistoryCache: RAM cache (TTL 5 phút) → bỏ 1 Qdrant roundtrip/request
   - save_turn vẫn ghi Qdrant async
 
 Entrypoint chính cho Phase 2 (chạy local).
@@ -386,17 +389,32 @@ def _build_rag_messages(
     else:
         system = SYSTEM_JOB_RAG
 
-    hint = (
-        "\n⚠️ USER LÀ FRESHER: CHỈ hiển thị job không yêu cầu KN hoặc dưới 1 năm."
-        if filters.get("experience_norm") == "fresher" else ""
-    )
+    # ── Build filter hint block ────────────────────────────────────────────
+    filter_hints: list[str] = []
+    if filters.get("experience_norm") == "fresher":
+        filter_hints.append("⚠️ USER LÀ FRESHER → CHỈ hiển thị job không yêu cầu KN hoặc ≤ 1 năm.")
+    elif filters.get("experience_norm") == "junior":
+        filter_hints.append("⚠️ USER LÀ JUNIOR → CHỈ hiển thị job yêu cầu ≤ 2 năm KN.")
+    elif filters.get("experience_norm") == "senior":
+        filter_hints.append("⚠️ USER LÀ SENIOR → ưu tiên job yêu cầu 3+ năm KN.")
+
+    sal_min = filters.get("salary_min", 0)
+    if sal_min > 0:
+        filter_hints.append(f"⚠️ USER YÊU CẦU LƯƠNG ≥ {sal_min} triệu → CHỈ hiển thị job có lương ≥ {sal_min} triệu.")
+
+    loc = filters.get("location_norm")
+    if loc and loc not in ("other", ""):
+        filter_hints.append(f"⚠️ USER YÊU CẦU ĐỊA ĐIỂM: {loc} → CHỈ hiển thị job tại {loc}.")
+
+    hint_block = "\n".join(filter_hints)
+    hint_section = f"\n\n[BỘ LỌC USER YÊU CẦU]\n{hint_block}" if hint_block else ""
 
     link_block   = "\n".join(f"- {u}" for u in links)
     user_content = (
-        f"Câu hỏi: {query}{hint}\n\n"
+        f"Câu hỏi: {query}{hint_section}\n\n"
         f"[DỮ LIỆU VIỆC LÀM]\n{context}\n\n"
         f"[LINK HỢP LỆ]\n{link_block}\n\n"
-        "Chỉ dùng dữ liệu trên. KHÔNG bịa đặt. Tối đa 3 job."
+        "Chỉ dùng dữ liệu trên. KHÔNG bịa đặt. KHÔNG lặp lại job trùng nhau. Tối đa 3 job."
     )
 
     return [
@@ -421,11 +439,21 @@ def _filter_links(text: str, valid_links: set) -> str:
 
 
 def _ensure_format(text: str, route: str) -> str:
+    # Xoá markdown headings
     text = re.sub(r"#{1,6}\s*", "", text)
     if route not in ("job_search", "career_advice"):
         return text.strip()
-    text = re.sub(r"Dưới đây là .*?:\n?", "", text).strip()
-    return text
+    # Xoá các pattern LLM hay phá format
+    _JUNK_PATTERNS = [
+        r"Dưới đây là .*?:[ ]*\n?",
+        r"Dựa trên .*?:[ ]*\n?",
+        r"Mình gợi ý .*?:[ ]*\n?",
+        r"Theo dữ liệu .*?:[ ]*\n?",
+        r"(?m)^\s*(?:FORMAT|SAU DANH SÁCH|QUY TẮC|BỘ LỌC|LINK HỢP LỆ)[:\s]*$",
+    ]
+    for pat in _JUNK_PATTERNS:
+        text = re.sub(pat, "", text, flags=re.IGNORECASE)
+    return text.strip()
 
 
 def _save_history(p: dict, sid: str, query: str, answer: str):
@@ -459,7 +487,7 @@ def _shutdown():
 
 if __name__ == "__main__":
     port = int(os.getenv("FLASK_PORT", 5001))
-    print(f"[Server] Starting Career Bot v6.2 on port {port}...")
+    print(f"[Server] Starting Career Bot v6.3 on port {port}...")
 
     try:
         delete_expired(dry_run=False)

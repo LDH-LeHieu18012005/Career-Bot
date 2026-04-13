@@ -1,275 +1,267 @@
 """
-generate_human_eval.py — Tự động gen câu trả lời cho Human Eval
-================================================================
-Đọc từng query trong CSV → gọi đúng pipeline của hệ thống (flask_serve)
-→ lưu response vào cột mới trong cùng file.
-
-Yêu cầu: Flask server phải đang chạy trước khi chạy script này.
-  python flask_serve.py   (terminal khác)
+generate_human_eval.py — Tạo dữ liệu cho human evaluation
+============================================================
+Hỗ trợ cả Jina v3 và Qwen3 Cross-Encoder reranker.
+Tự động đọc cấu hình từ .env.
 
 Cách chạy:
-  cd career_bot_v6
-  python generate_human_eval.py
-  python generate_human_eval.py --input test/human_eval_queries.csv
-  python generate_human_eval.py --input test/human_eval_queries.csv --delay 1.5
-  python generate_human_eval.py --resume   # tiếp tục nếu bị ngắt giữa chừng
-
-Cột thêm vào CSV:
-  bot_response   — câu trả lời từ bot
-  bot_route      — route thực tế bot phân loại (job_search / career_advice / chitchat)
-  bot_confidence — confidence score của router
-  latency_s      — thời gian phản hồi (giây)
-  status         — ok | error | timeout | skipped
-  generated_at   — timestamp
+  python generate_human_eval.py                    # dùng reranker trong .env
+  python generate_human_eval.py --reranker jina_v3
+  python generate_human_eval.py --reranker qwen3
+  python generate_human_eval.py --limit 20 --delay 1.5
+  python generate_human_eval.py --resume
 """
 
+from __future__ import annotations
+
 import argparse
+import csv
+import json
+import os
 import sys
 import time
 import uuid
 from datetime import datetime
 from pathlib import Path
 
-import pandas as pd
-import requests
+from dotenv import load_dotenv
 
-# ── Config ────────────────────────────────────────────────────────────────────
-API_ENDPOINT = "http://127.0.0.1:5001/api/v1/chat"
-API_TIMEOUT  = 120  # giây
+# Load .env trước khi parse arguments
+load_dotenv()
 
-# Các cột sẽ được thêm vào CSV
-OUTPUT_COLS = ["bot_response", "bot_route", "bot_confidence", "latency_s", "status", "generated_at"]
+HERE = Path(__file__).resolve().parent
 
 
-# ── Kiểm tra server ───────────────────────────────────────────────────────────
-def _check_server() -> bool:
+# ── CSV reader (safe, RFC-4180 compliant) ─────────────────────────────────────
+def _read_csv(path: str) -> list[dict]:
+    """Đọc CSV bằng csv.DictReader — xử lý đúng quoted fields có dấu phẩy."""
+    rows = []
+    with open(path, encoding="utf-8-sig", newline="") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            rows.append(dict(row))
+    return rows
+
+
+# ── Checkpoint helpers ────────────────────────────────────────────────────────
+def _load_existing(out_path: str) -> dict[str, dict]:
+    """Load existing items từ output JSON để resume."""
+    p = Path(out_path)
+    if not p.exists():
+        return {}
     try:
-        r = requests.get("http://127.0.0.1:5001/api/v1/health", timeout=10)
-        return r.status_code == 200
+        with open(p, encoding="utf-8") as f:
+            data = json.load(f)
+        return {item["id"]: item for item in data.get("items", [])}
+    except Exception as e:
+        print(f"[Warn] Không đọc được checkpoint ({e}) → bắt đầu mới")
+        return {}
+
+
+def _save(out_path: str, items: list[dict], reranker: str = "", reranker_model: str = ""):
+    """Lưu kết quả ra JSON (ghi đè toàn bộ, gọi sau mỗi request)."""
+    p = Path(out_path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "meta": {
+            "total":          len(items),
+            "generated_at":   datetime.now().isoformat(),
+            "reranker":       reranker,
+            "reranker_model": reranker_model,
+            "device":         os.getenv("QWEN3_RERANKER_DEVICE") or "auto",
+        },
+        "items": items,
+    }
+    with open(p, "w", encoding="utf-8") as f:
+        json.dump(payload, f, ensure_ascii=False, indent=2)
+
+
+# ── Health check ──────────────────────────────────────────────────────────────
+def _check_server(api_base: str) -> bool:
+    try:
+        import urllib.request, urllib.error
+        req = urllib.request.Request(
+            f"{api_base}/api/v1/health",
+            headers={"User-Agent": "generate_human_eval/1.0"},
+        )
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            return resp.status == 200
     except Exception:
         return False
 
 
-# ── Gọi API ───────────────────────────────────────────────────────────────────
-def _call_api(query: str, session_id: str) -> dict:
-    """
-    Gọi đúng endpoint /api/v1/chat của flask_serve.py.
-    Trả về dict với các key: content, route, confidence, latency_s, status.
-    """
-    t0 = time.perf_counter()
-    try:
-        resp = requests.post(
-            API_ENDPOINT,
-            json={"query": query, "session_id": session_id},
-            timeout=API_TIMEOUT,
-        )
-        latency = time.perf_counter() - t0
+# ── Call chat API ─────────────────────────────────────────────────────────────
+def _call_chat(api_base: str, query: str, session_id: str, timeout: int = 90) -> dict:
+    """Gọi POST /api/v1/chat bằng urllib (không phụ thuộc requests)."""
+    import urllib.request, urllib.error
+    import json as _json
 
-        if resp.status_code == 200:
-            data = resp.json()
-            return {
-                "content":    data.get("content", ""),
-                "route":      data.get("route", ""),
-                "confidence": data.get("confidence", 0.0),
-                "latency_s":  round(latency, 3),
-                "status":     "ok",
-            }
-        else:
-            return {
-                "content":    f"[API ERROR {resp.status_code}] {resp.text[:300]}",
-                "route":      "",
-                "confidence": 0.0,
-                "latency_s":  round(latency, 3),
-                "status":     f"error_{resp.status_code}",
-            }
+    payload = _json.dumps({
+        "query":      query,
+        "session_id": session_id,
+    }).encode("utf-8")
 
-    except requests.exceptions.Timeout:
-        return {
-            "content":    f"[TIMEOUT after {API_TIMEOUT}s]",
-            "route":      "",
-            "confidence": 0.0,
-            "latency_s":  round(time.perf_counter() - t0, 3),
-            "status":     "timeout",
-        }
-    except requests.exceptions.ConnectionError:
-        return {
-            "content":    "[CONNECTION ERROR] Server không phản hồi.",
-            "route":      "",
-            "confidence": 0.0,
-            "latency_s":  round(time.perf_counter() - t0, 3),
-            "status":     "connection_error",
-        }
-    except Exception as e:
-        return {
-            "content":    f"[ERROR] {e}",
-            "route":      "",
-            "confidence": 0.0,
-            "latency_s":  round(time.perf_counter() - t0, 3),
-            "status":     "error",
-        }
+    req = urllib.request.Request(
+        f"{api_base}/api/v1/chat",
+        data=payload,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        body = resp.read().decode("utf-8")
+    return _json.loads(body)
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 def main():
     parser = argparse.ArgumentParser(
-        description="Gen câu trả lời cho Human Eval CSV",
+        description="Tạo dữ liệu human eval từ API CareerBot (hỗ trợ Jina v3 & Qwen3 reranker)",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Ví dụ:
+        epilog="""Ví dụ:
   python generate_human_eval.py
-  python generate_human_eval.py --input test/human_eval_queries.csv
-  python generate_human_eval.py --delay 2.0
-  python generate_human_eval.py --resume
-  python generate_human_eval.py --dry-run   # test 3 query đầu không lưu
-        """,
+  python generate_human_eval.py --reranker qwen3
+  python generate_human_eval.py --limit 20 --delay 0.8
+  python generate_human_eval.py --resume --out test/my_eval.json""",
     )
-    parser.add_argument(
-        "--input", default="test/human_eval_queries.csv",
-        help="Đường dẫn file CSV (default: test/human_eval_queries.csv)",
-    )
-    parser.add_argument(
-        "--delay", type=float, default=1.0,
-        help="Delay giữa các request (giây, default: 1.0) — tránh rate limit Groq",
-    )
-    parser.add_argument(
-        "--resume", action="store_true",
-        help="Bỏ qua các query đã có bot_response, chỉ chạy các query còn trống",
-    )
-    parser.add_argument(
-        "--dry-run", action="store_true",
-        help="Chạy thử 3 query đầu, không ghi vào file",
-    )
-    parser.add_argument(
-        "--api", default=API_ENDPOINT,
-        help=f"API endpoint (default: {API_ENDPOINT})",
-    )
+    parser.add_argument("--api",     default="http://127.0.0.1:5001",
+                        help="Base URL của Flask server")
+    parser.add_argument("--csv",     default=str(HERE / "test" / "test_retrieval_50q.csv"),
+                        help="Path tới CSV test queries")
+    parser.add_argument("--out",     default=None,
+                        help="Path lưu output JSON (nếu không chỉ định sẽ tự sinh theo reranker)")
+    parser.add_argument("--reranker", default=None,
+                        help="Tên reranker: jina_v3 hoặc qwen3 (ưu tiên command line > .env)")
+    parser.add_argument("--limit",   type=int, default=0,
+                        help="Giới hạn số queries (0 = tất cả)")
+    parser.add_argument("--delay",   type=float, default=1.0,
+                        help="Giây chờ giữa các request")
+    parser.add_argument("--resume",  action="store_true",
+                        help="Bỏ qua queries đã có trong output file")
+    parser.add_argument("--timeout", type=int, default=90,
+                        help="Timeout mỗi request (giây)")
+
     args = parser.parse_args()
 
-    # Resolve path (tìm từ project root nếu cần)
-    csv_path = Path(args.input)
-    if not csv_path.exists():
-        # Thử tìm relative từ file script
-        alt = Path(__file__).parent / args.input
-        if alt.exists():
-            csv_path = alt
-        else:
-            print(f"[ERROR] Không tìm thấy file: {args.input}")
-            sys.exit(1)
+    # ── Xử lý reranker từ .env và command line ───────────────────────────────
+    env_backend = os.getenv("RERANKER_BACKEND", "jina_v3").strip().lower()
 
-    # ── Kiểm tra server ───────────────────────────────────────────────────────
-    print(f"\n[Check] Kiểm tra Flask server tại {args.api}...", end=" ", flush=True)
-    if not _check_server():
-        print("FAILED")
-        print("\n[ERROR] Flask server chưa chạy hoặc không phản hồi.")
-        print("  → Mở terminal khác và chạy: python flask_serve.py")
-        print("  → Sau đó chạy lại script này.\n")
-        sys.exit(1)
-    print("OK ✓")
-
-    # ── Đọc CSV ───────────────────────────────────────────────────────────────
-    df = pd.read_csv(csv_path, dtype=str)
-    df = df.fillna("")
-    print(f"[Load] {len(df)} queries từ {csv_path}")
-
-    if "query" not in df.columns:
-        print("[ERROR] CSV thiếu cột 'query'.")
-        sys.exit(1)
-
-    # Thêm cột output nếu chưa có
-    for col in OUTPUT_COLS:
-        if col not in df.columns:
-            df[col] = ""
-
-    # ── Xác định queries cần chạy ────────────────────────────────────────────
-    if args.resume:
-        pending_mask = df["bot_response"].eq("") | df["status"].isin(["", "timeout", "error", "connection_error"])
-        pending_idx  = df[pending_mask].index.tolist()
-        skipped      = len(df) - len(pending_idx)
-        if skipped > 0:
-            print(f"[Resume] Bỏ qua {skipped} queries đã có response, chạy {len(pending_idx)} queries còn lại.")
+    if args.reranker is None:
+        args.reranker = env_backend
     else:
-        pending_idx = df.index.tolist()
+        args.reranker = args.reranker.strip().lower()
 
-    if args.dry_run:
-        pending_idx = pending_idx[:3]
-        print(f"[Dry-run] Chỉ chạy {len(pending_idx)} queries đầu, KHÔNG lưu file.")
+    # Xác định model name để ghi vào meta
+    if args.reranker == "qwen3" or args.reranker.startswith("qwen"):
+        reranker_model = os.getenv("QWEN3_RERANKER_MODEL", "Qwen/Qwen3-Reranker-0.6B")
+        reranker_display = "qwen3"
+    else:
+        reranker_model = "jina-reranker-v3"
+        reranker_display = "jina_v3"
 
-    if not pending_idx:
-        print("[Done] Tất cả queries đã có response. Dùng --resume=False để chạy lại.")
-        sys.exit(0)
+    # Tự động sinh tên file output nếu không chỉ định
+    if args.out is None:
+        args.out = str(HERE / "test" / f"human_eval_{reranker_display}.json")
 
-    # ── Mỗi session_id riêng per query (để không bị context leak giữa queries) ──
-    # Đây là điểm quan trọng: human eval cần mỗi query độc lập
-    print(f"\n[Run] Bắt đầu gen {len(pending_idx)} queries (delay={args.delay}s giữa mỗi request)...\n")
-    print(f"{'ID':>4}  {'Route':<15} {'Status':<12} {'Latency':>8}  Query")
-    print("-" * 80)
+    print(f"[Reranker] {reranker_display.upper()}  |  Model: {reranker_model}")
 
-    ok_count = err_count = 0
+    # ── Kiểm tra server ──────────────────────────────────────────────────────
+    print(f"\n[Check] Kiểm tra Flask server tại {args.api}/api/v1/health ...", end=" ", flush=True)
+    if _check_server(args.api):
+        print("OK ✓")
+    else:
+        print("FAILED ✗")
+        print(f"\n  ⚠  Không kết nối được server tại {args.api}")
+        print("     Hãy chắc chắn Flask đang chạy: python flask_serve.py")
+        sys.exit(1)
 
-    for pos, idx in enumerate(pending_idx, 1):
-        row   = df.loc[idx]
-        query = str(row["query"]).strip()
-        qid   = str(row.get("id", idx))
+    # ── Đọc CSV ──────────────────────────────────────────────────────────────
+    if not Path(args.csv).exists():
+        print(f"\n[ERROR] Không tìm thấy: {args.csv}")
+        sys.exit(1)
 
-        if not query:
-            df.at[idx, "status"] = "skipped"
-            df.at[idx, "generated_at"] = datetime.now().isoformat()
-            print(f"{qid:>4}  {'—':<15} {'skipped':<12} {'—':>8}  (trống)")
-            continue
+    try:
+        rows = _read_csv(args.csv)
+    except Exception as e:
+        print(f"\n[ERROR] Không đọc được CSV: {e}")
+        sys.exit(1)
 
-        # Session ID độc lập mỗi query → không bị ảnh hưởng context câu trước
-        session_id = f"human_eval_{uuid.uuid4().hex[:8]}"
+    if args.limit > 0:
+        rows = rows[:args.limit]
 
-        result = _call_api(query, session_id)
+    print(f"[CSV]   {len(rows)} queries từ {args.csv}")
 
-        # Ghi vào dataframe
-        df.at[idx, "bot_response"]   = result["content"]
-        df.at[idx, "bot_route"]      = result["route"]
-        df.at[idx, "bot_confidence"] = result["confidence"]
-        df.at[idx, "latency_s"]      = result["latency_s"]
-        df.at[idx, "status"]         = result["status"]
-        df.at[idx, "generated_at"]   = datetime.now().isoformat()
+    # ── Resume ───────────────────────────────────────────────────────────────
+    existing: dict[str, dict] = {}
+    if args.resume:
+        existing = _load_existing(args.out)
+        if existing:
+            print(f"[Resume] {len(existing)} queries đã có → bỏ qua")
 
-        status_str = result["status"]
-        if result["status"] == "ok":
-            ok_count += 1
-        else:
-            err_count += 1
+    # ── Chuẩn bị ─────────────────────────────────────────────────────────────
+    items: list[dict] = list(existing.values())
+    pending = [r for r in rows if r["id"] not in existing]
+    errors = 0
 
-        query_preview = query[:45] + "…" if len(query) > 45 else query
-        print(
-            f"{qid:>4}  {result['route']:<15} {status_str:<12} "
-            f"{result['latency_s']:>7.2f}s  {query_preview}"
-        )
+    print(f"[Run]   Cần gọi API cho {len(pending)} queries\n")
+    print("─" * 75)
 
-        # Lưu ngay vào file sau mỗi query (an toàn nếu bị crash giữa chừng)
-        if not args.dry_run:
-            df.to_csv(csv_path, index=False, encoding="utf-8-sig")
+    # ── Gọi API ──────────────────────────────────────────────────────────────
+    for i, row in enumerate(pending, 1):
+        qid   = row.get("id", "?")
+        query = row.get("query", "")
+        qtype = row.get("type", "?")
+        diff  = row.get("difficulty", "?")
+        exp_t = row.get("expected_titles", "")
 
-        # Delay giữa requests — quan trọng để không bị rate limit Groq
-        if pos < len(pending_idx) and args.delay > 0:
+        label = f"[{i:>3}/{len(pending)}] {qid} [{diff:>6}]  {query[:55]}"
+        print(label, end=" … ", flush=True)
+        t0 = time.perf_counter()
+
+        session_id = str(uuid.uuid4())
+
+        item: dict = {
+            "id":              qid,
+            "query":           query,
+            "type":            qtype,
+            "difficulty":      diff,
+            "expected_titles": exp_t,
+            "generated_at":    datetime.now().isoformat(),
+        }
+
+        try:
+            data = _call_chat(args.api, query, session_id, timeout=args.timeout)
+            elapsed = time.perf_counter() - t0
+            item.update({
+                "response":   data.get("content", ""),
+                "route":      data.get("route", ""),
+                "confidence": data.get("confidence", 0),
+                "elapsed_s":  round(elapsed, 3),
+            })
+            print(f"OK  ({elapsed:.1f}s)  route={item['route']}")
+
+        except Exception as e:
+            elapsed = time.perf_counter() - t0
+            item.update({
+                "response":   f"[ERROR] {e}",
+                "route":      "error",
+                "confidence": 0,
+                "elapsed_s":  round(elapsed, 3),
+            })
+            print(f"FAIL ({elapsed:.1f}s)  {e}")
+            errors += 1
+
+        items.append(item)
+        _save(args.out, items, reranker=reranker_display, reranker_model=reranker_model)
+
+        if args.delay > 0 and i < len(pending):
             time.sleep(args.delay)
 
-    # ── Tổng kết ──────────────────────────────────────────────────────────────
-    print("\n" + "=" * 80)
-    print(f"  HOÀN THÀNH")
-    print(f"  Tổng      : {len(pending_idx)} queries")
-    print(f"  Thành công: {ok_count}")
-    print(f"  Lỗi       : {err_count}")
-
-    if not args.dry_run:
-        print(f"  File lưu  : {csv_path.resolve()}")
-        # In preview 3 dòng đầu có response
-        sample = df[df["status"] == "ok"].head(3)
-        if len(sample):
-            print(f"\n  Preview (3 dòng đầu):")
-            for _, r in sample.iterrows():
-                preview = str(r["bot_response"])[:80].replace("\n", " ")
-                print(f"    [{r.get('id','')}] {preview}…")
-    else:
-        print("  (Dry-run: không ghi file)")
-
-    print("=" * 80 + "\n")
+    # ── Summary ──────────────────────────────────────────────────────────────
+    print("─" * 75)
+    ok_count = len(items) - errors
+    print(f"\n✅ Hoàn thành: {len(items)} items  ({ok_count} OK, {errors} lỗi)")
+    print(f"   Output: {args.out}")
+    print(f"\n▶  Bước tiếp theo: python human_eval_server.py\n")
 
 
 if __name__ == "__main__":
