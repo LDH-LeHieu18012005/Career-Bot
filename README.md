@@ -447,6 +447,14 @@ python eval_qwen3_reranker.py --no-rerank
 
 Metrics: Recall@1, Recall@5, Recall@10, Hit@1/5/10 → phân tích theo difficulty (easy/medium/hard).
 
+**Kết quả đánh giá (50 queries):**
+
+| Phương pháp (Reranker) | Recall@1 | Recall@5 | Recall@10 |
+|------------------------|----------|----------|-----------|
+| **Jina v3** | 0.337 | 0.597 | 0.713 |
+| **Qwen 3 (0.6B)** | 0.360 | 0.663 | 0.733 |
+
+
 ### Human Evaluation
 
 ```bash
