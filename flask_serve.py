@@ -359,8 +359,13 @@ def _handle(query: str, sid: str):
 
     else:
         # chitchat
+        from datetime import datetime
+        days = ["Chủ nhật", "Thứ Hai", "Thứ Ba", "Thứ Tư", "Thứ Năm", "Thứ Sáu", "Thứ Bảy"]
+        now = datetime.now()
+        day_str = days[int(now.strftime('%w'))]
+        sys_prompt = SYSTEM_CHAT + f"\n\n[THÔNG TIN THỜI GIAN]\nHôm nay là {day_str}, ngày {now.strftime('%d/%m/%Y, %H:%M')}."
         messages = (
-            [{"role": "system", "content": SYSTEM_CHAT}]
+            [{"role": "system", "content": sys_prompt}]
             + history[-2:]
             + [{"role": "user", "content": query}]
         )
@@ -476,7 +481,7 @@ def _build_rag_messages(
         f"[DỮ LIỆU VIỆC LÀM]\n{context}\n\n"
         f"[LINK HỢP LỆ]\n{link_block}\n\n"
         f"[LỊCH SỬ JOB ĐÃ HIỆN]\n{history_ids}\n\n"
-        "Chỉ dùng dữ liệu trên. KHÔNG bịa đặt. KHÔNG lặp job trùng. Tối đa 3 job."
+        "Chỉ dùng dữ liệu trên. KHÔNG bịa đặt. KHÔNG lặp job trùng. Tối đa 5 job."
     )
 
     return [
