@@ -172,13 +172,29 @@ threading.Thread(target=_cleanup_ctx, daemon=True).start()
 
 # ── Query Parser ──────────────────────────────────────────────────────────────
 _LOCATION_KEYWORDS = {
-    "hà nội": "ha_noi",   "hanoi": "ha_noi",       "hn": "ha_noi",
+    "hà nội": "ha_noi", "hanoi": "ha_noi", "hn": "ha_noi",
+    "ha noi": "ha_noi", "hà nội city": "ha_noi",
+
     "hồ chí minh": "ho_chi_minh", "hcm": "ho_chi_minh",
-    "tp.hcm": "ho_chi_minh",      "sài gòn": "ho_chi_minh",
-    "đà nẵng": "da_nang",
-    "cần thơ": "can_tho",  "hải phòng": "hai_phong",
-    "bình dương": "binh_duong",   "đồng nai": "dong_nai",
-    "remote": "remote",    "work from home": "remote", "wfh": "remote",
+    "tp.hcm": "ho_chi_minh", "tp hcm": "ho_chi_minh",
+    "sài gòn": "ho_chi_minh", "saigon": "ho_chi_minh",
+
+    "đà nẵng": "da_nang", "danang": "da_nang",
+    "cần thơ": "can_tho", "cantho": "can_tho",
+    "hải phòng": "hai_phong", "haiphong": "hai_phong",
+
+    "bình dương": "binh_duong", "binh duong": "binh_duong",
+    "đồng nai": "dong_nai", "dong nai": "dong_nai",
+
+    "quảng ninh": "quang_ninh",
+    "huế": "hue", "thừa thiên huế": "hue",
+    "nha trang": "khanh_hoa",
+    "vũng tàu": "ba_ria_vung_tau",
+
+    "remote": "remote", "work from home": "remote", "wfh": "remote",
+    "làm từ xa": "remote", "online": "remote",
+    "full remote": "remote", "remote job": "remote",
+    "hybrid": "hybrid", "onsite": "onsite"
 }
 
 # [V6.4-FIX] Xoá "N tuổi" / "N người" / "N năm tuổi" TRƯỚC khi chạy salary regex
@@ -195,11 +211,99 @@ _SALARY_RE = re.compile(
     re.IGNORECASE,
 )
 
-_LINK_ONLY_KW = ["link", "url", "ứng tuyển", "apply", "xin link"]
-_FRESHER_KW   = ["fresher", "mới ra trường", "chưa có kinh nghiệm", "sinh viên",
-                  "intern", "mới học", "tự học", "chưa biết gì", "học việc", "thực tập"]
-_JUNIOR_KW    = ["junior", "1 năm", "2 năm", "mới đi làm"]
-_SENIOR_KW    = ["senior", "lead", "3 năm", "4 năm", "5 năm", "nhiều năm"]
+_LINK_ONLY_KW = [
+    "link", "url", "ứng tuyển", "apply", "xin link",
+    "link job", "link apply", "link jd", "link tuyển dụng",
+    "job link", "apply link", "jd", "job description",
+    "mô tả", "mô tả công việc", "mô tả job",
+    "nộp cv", "gửi cv", "gửi hồ sơ",
+    "apply ngay", "ứng tuyển ngay", "apply luôn",
+    "cách apply", "apply sao", "apply kiểu gì",
+    "nộp ở đâu", "ứng tuyển ở đâu",
+    "cho xin job", "cho xin link job",
+    "job này", "việc này", "tin này", "bài này",
+    "vị trí này", "công việc này",
+    "apply job", "submit cv", "submit hồ sơ",
+    "nộp đơn", "đăng ký ứng tuyển",
+    "link tuyển", "link việc",
+    "apply here", "apply now",
+    "how to apply", "where to apply",
+    "gửi đơn", "nộp hồ sơ ở đâu"
+]
+_FRESHER_KW = [
+    "fresher", "mới ra trường", "chưa có kinh nghiệm", "sinh viên",
+    "intern", "mới học", "tự học", "chưa biết gì", "học việc", "thực tập",
+
+    "internship", "trainee", "entry level", "entry-level",
+    "no exp", "no experience", "0 năm", "0 exp",
+    "không kinh nghiệm", "ít kinh nghiệm",
+    "mới tốt nghiệp", "sắp ra trường",
+    "sv năm cuối", "năm cuối",
+    "tay ngang", "chuyển ngành",
+    "học trái ngành", "trái ngành",
+    "newbie", "beginner",
+    "starter", "entry",
+    "fresher level", "intern level",
+    "chưa đi làm", "chưa có job",
+    "chưa từng làm", "first job",
+    "job đầu tiên", "việc đầu tiên",
+    "junior mới", "junior fresher",
+    "intern mới", "thực tập sinh",
+    "thực tập it", "intern it",
+    "chưa có skill", "thiếu kinh nghiệm",
+    "đang học", "đi học",
+    "sinh viên mới", "mới tốt nghiệp đại học"
+]
+_JUNIOR_KW = [
+    "junior", "1 năm", "2 năm", "mới đi làm",
+
+    "1-2 năm", "1+ năm", "2+ năm",
+    "jun", "jr", "jr dev",
+    "junior dev", "junior level",
+    "level junior", "middle thấp",
+    "đã đi làm", "có kinh nghiệm",
+    "có kinh nghiệm cơ bản",
+    "biết cơ bản", "skill cơ bản",
+    "basic level", "entry junior",
+    "junior engineer", "junior it",
+    "junior data", "junior analyst",
+    "làm 1 năm", "làm 2 năm",
+    "khoảng 1 năm", "tầm 2 năm",
+    "ít kinh nghiệm", "ít exp",
+    "exp 1 năm", "exp 2 năm",
+    "junior position", "junior role",
+    "đã có job", "đi làm rồi",
+    "middle junior", "junior middle",
+    "level thấp", "level basic",
+    "có nền tảng", "có base",
+    "biết chút", "biết sơ",
+    "đã từng làm", "có trải nghiệm"
+]
+_SENIOR_KW = [
+    "senior", "lead", "3 năm", "4 năm", "5 năm", "nhiều năm",
+
+    "3+ năm", "4+ năm", "5+ năm", "trên 3 năm",
+    "exp", "experience", "nhiều kinh nghiệm",
+    "sr", "senior level", "senior dev",
+    "senior engineer", "senior it",
+    "team lead", "tech lead", "leader",
+    "lead dev", "lead engineer",
+    "principal", "staff engineer",
+    "expert", "chuyên gia",
+    "mid-senior", "middle senior",
+    "level cao", "level senior",
+    "làm lâu năm", "kinh nghiệm nhiều",
+    "exp 3 năm", "exp 4 năm", "exp 5 năm",
+    "đã làm lâu", "lâu năm",
+    "quản lý team", "dẫn dắt team",
+    "lead team", "manage team",
+    "architect", "solution architect",
+    "high level", "advanced level",
+    "chuyên sâu", "deep experience",
+    "core member", "key member",
+    "senior position", "senior role",
+    "đầu ngành", "giỏi"
+]
 
 # [V6.4] Từ khoá nhận diện câu hỏi kiến thức thuần tuý (không cần RAG job)
 _PURE_ADVICE_KW = [
@@ -210,6 +314,23 @@ _PURE_ADVICE_KW = [
     "triển vọng", "tương lai", "xu hướng ngành",
     "nên chọn", "nên làm", "ngành nào", "vị trí nào",
     "tuổi", "kinh nghiệm bao nhiêu năm",
+    "chuẩn bị gì", "cần chuẩn bị", "phỏng vấn", "cần những gì",
+
+    "học bao lâu", "mất bao lâu",
+    "có đáng không", "có nên không",
+    "ngành này thế nào", "job này thế nào",
+    "review ngành", "review công việc",
+    "công việc này", "nghề này",
+    "có ổn không", "ổn không",
+    "có tương lai không",
+    "có bị đào thải không",
+    "ai phù hợp", "có hợp không",
+    "so sánh", "nên chọn a hay b",
+    "bắt đầu từ đâu", "start từ đâu", "bắt đầu thế nào",
+    "career path", "con đường nghề nghiệp",
+    "có cần bằng không", "cần bằng cấp không",
+    "tự học được không",
+    "có khó không với người mới"
 ]
 
 
@@ -476,12 +597,13 @@ def _build_rag_messages(
     link_block  = "\n".join(f"- {u}" for u in links)
     history_ids = "\n".join(exclude_ids[:10]) if exclude_ids else "(chưa có)"
 
+    job_limit_text = "Tối đa 2 job." if route == "career_advice" else "Tối đa 5 job."
     user_content = (
         f"Câu hỏi: {query}{hint_section}\n\n"
         f"[DỮ LIỆU VIỆC LÀM]\n{context}\n\n"
         f"[LINK HỢP LỆ]\n{link_block}\n\n"
         f"[LỊCH SỬ JOB ĐÃ HIỆN]\n{history_ids}\n\n"
-        "Chỉ dùng dữ liệu trên. KHÔNG bịa đặt. KHÔNG lặp job trùng. Tối đa 5 job."
+        f"Chỉ dùng dữ liệu trên. KHÔNG bịa đặt. KHÔNG lặp job trùng. {job_limit_text}"
     )
 
     return [

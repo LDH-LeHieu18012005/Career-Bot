@@ -79,6 +79,18 @@ class SelfReflection:
                         vectors_config=VectorParams(size=1, distance=Distance.COSINE),
                     )
                     print(f"[Reflection] Created collection '{self.hist_col}'")
+                
+                # Luôn thử tạo payload index (nếu đã có Qdrant sẽ bỏ qua)
+                from qdrant_client.models import PayloadSchemaType
+                try:
+                    self.client.create_payload_index(
+                        collection_name=self.hist_col,
+                        field_name="session_id",
+                        field_schema=PayloadSchemaType.KEYWORD,
+                    )
+                except Exception as ex:
+                    pass
+
                 self._ready = True
                 return True
             except Exception as e:
